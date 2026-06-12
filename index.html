@@ -631,6 +631,31 @@ to{transform:translateX(110vw)}
  font:11px Georgia,serif;
 }
 
+
+/* Becoming System */
+#becomingModal{
+position:fixed;inset:0;z-index:130000;
+background:rgba(0,0,0,.72);
+display:flex;align-items:center;justify-content:center;
+}
+#becomingCard{
+width:min(92vw,520px);
+background:rgba(15,10,8,.95);
+border:1px solid rgba(232,168,107,.3);
+border-radius:20px;padding:20px;color:#e8dcc8;
+font-family:Georgia,serif;
+}
+#becomingCard input{
+width:100%;margin:8px 0;padding:10px;border-radius:10px;
+border:1px solid rgba(232,168,107,.2);
+background:#221812;color:#e8dcc8;
+}
+#becomingCard button{
+padding:10px 14px;border:0;border-radius:999px;
+background:linear-gradient(180deg,#ffd18b,#e8a86b);
+color:#2a170b;
+}
+
 </style>
 
 <script>
@@ -3201,6 +3226,46 @@ window.MILESTONE_G32_READY='animated-builder';
  if(enter) enter.addEventListener('click',()=>setTimeout(loadDynamicLibrary,250));
  setTimeout(loadDynamicLibrary,1200);
  window.MOSES_DYNAMIC_LIBRARY=true;
+})();
+</script>
+
+
+<div id="becomingModal">
+ <div id="becomingCard">
+   <h2>Found Your Civilization</h2>
+   <p>Who do you want to become?</p>
+   <input id="becomingAspiration" placeholder="Visionary Founder">
+   <input id="becomingCivilization" placeholder="Civilization Name">
+   <input id="becomingMotto" placeholder="Motto">
+   <input id="becomingFounder" placeholder="Founder Name">
+   <button id="becomingSave">Begin Civilization</button>
+ </div>
+</div>
+
+
+<script>
+(function(){
+ const KEY='moses_identity';
+ const modal=document.getElementById('becomingModal');
+ function load(){
+   try{return JSON.parse(localStorage.getItem(KEY)||'null')}catch(e){return null}
+ }
+ function saveIdentity(){
+   const data={
+     aspiration:document.getElementById('becomingAspiration').value,
+     civilization:document.getElementById('becomingCivilization').value,
+     motto:document.getElementById('becomingMotto').value,
+     founder:document.getElementById('becomingFounder').value
+   };
+   localStorage.setItem(KEY,JSON.stringify(data));
+   modal.style.display='none';
+ }
+ const existing=load();
+ if(existing){
+   modal.style.display='none';
+ }else{
+   document.getElementById('becomingSave').onclick=saveIdentity;
+ }
 })();
 </script>
 
