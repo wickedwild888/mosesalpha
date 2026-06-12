@@ -1148,21 +1148,76 @@ function plannedRenewal(){
   return d.toLocaleDateString(undefined,{month:'long',day:'numeric',year:'numeric'});
 }
 function activateStewardTest(){
+  // Local success marker used after Stripe redirects back to the app.
+  // The durable subscription truth should come from /api/stripe-webhook -> Supabase.
   state.subscriber=true;
   state.subscriptionPlan='steward_monthly';
-  state.purchaseStatus='test_active';
+  state.purchaseStatus='stripe_checkout_success';
   state.trialStarted=state.trialStarted||new Date().toISOString();
   state.renewalDate=plannedRenewal();
-  state.syncStatus='steward sync ready';
+  state.syncStatus='stripe checkout complete — verifying cloud subscription';
   state.lastSync=new Date().toLocaleString();
   save();updateCloudBadge();
 }
 function deactivateStewardTest(){
   state.subscriber=false;
   state.subscriptionPlan='free';
-  state.purchaseStatus='test_inactive';
+  state.purchaseStatus='inactive';
   state.syncStatus='local save';
   save();updateCloudBadge();
+}
+async function startStripeCheckout(){
+  const email=(state.account&&state.account.email)||'';
+  state.purchaseStatus='stripe_checkout_starting';
+  save();
+  try{
+    const res=await fetch('/api/create-checkout-session',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email,plan:'steward_monthly'})
+    });
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok||!data.url) throw new Error(data.error||'Stripe checkout could not start.');
+    window.location.href=data.url;
+  }catch(err){
+    state.purchaseStatus='stripe_checkout_error';
+    save();
+    accountCard.innerHTML=`<h2>Stripe Setup Needed</h2>
+      <p>${escapeHtml(err.message||'Checkout could not start.')}</p>
+      <div class="planCard"><p class="planList">Make sure this is deployed on Vercel and the Stripe environment variables are set.</p></div>
+      <button id="backMembership">Back</button>`;
+    accountCard.querySelector('#backMembership').onclick=openMembership;
+  }
+}
+async function openBillingPortal(){
+  try{
+    const email=(state.account&&state.account.email)||'';
+    const res=await fetch('/api/create-portal-session',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email})
+    });
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok||!data.url) throw new Error(data.error||'Billing portal unavailable.');
+    window.location.href=data.url;
+  }catch(err){
+    accountCard.innerHTML=`<h2>Billing Portal</h2><p>${escapeHtml(err.message||'Billing portal unavailable.')}</p><button id="backMembership">Back</button>`;
+    accountCard.querySelector('#backMembership').onclick=openMembership;
+  }
+}
+function handleStripeReturn(){
+  const params=new URLSearchParams(window.location.search);
+  if(params.get('success')==='true'){
+    activateStewardTest();
+    setTimeout(()=>{accountPanel.style.display='flex';openWelcomeSteward();},400);
+    history.replaceState({},document.title,window.location.pathname);
+  }
+  if(params.get('canceled')==='true'){
+    state.purchaseStatus='stripe_checkout_canceled';
+    save();
+    setHint('Steward checkout canceled. Nothing was charged.');
+    history.replaceState({},document.title,window.location.pathname);
+  }
 }
 function openAccount(){
   const acct=state.account||{};
@@ -1216,9 +1271,9 @@ function openMembership(){
       </p>
     </div>
     <p>${state.subscriber
-      ? `Your test membership is active.<br>Renewal: ${escapeHtml(state.renewalDate||plannedRenewal())}`
-      : 'This is the G1 subscription UX. Payment provider connection comes next.'}</p>
-    <button id="startTrial">${state.subscriber?'Manage Membership':'Start Steward Trial'}</button>
+      ? `Your Steward membership is active.<br>Renewal: ${escapeHtml(state.renewalDate||plannedRenewal())}`
+      : 'Checkout is now connected to Stripe. You will return here after payment.'}</p>
+    <button id="startTrial">${state.subscriber?'Manage Billing':'Start Steward Checkout'}</button>
     <button id="restoreSub">Restore Purchase</button>
     <button id="backAcct">Back</button>`;
   accountCard.querySelector('#startTrial').onclick=()=>{state.subscriber?openManageMembership():openConfirmPurchase()};
@@ -1227,33 +1282,35 @@ function openMembership(){
 }
 function openConfirmPurchase(){
   accountCard.innerHTML=`<h2>Confirm Steward</h2>
-    <p>You are starting the Steward test flow.</p>
-    <div class="planCard"><h3>$4.99 / month</h3><p class="planList">Billing is simulated in this build. Real Stripe / app-store billing comes in G2/G3.</p></div>
-    <button id="confirmSteward">Confirm Test Upgrade</button>
+    <p>You are starting the real Stripe checkout flow.</p>
+    <div class="planCard"><h3>$4.99 / month</h3><p class="planList">Secure billing is handled by Stripe. After checkout, Moses unlocks Steward locally while the webhook updates Supabase as the source of truth.</p></div>
+    <button id="confirmSteward">Continue to Stripe</button>
     <button id="cancelSteward">Cancel</button>`;
-  accountCard.querySelector('#confirmSteward').onclick=()=>{activateStewardTest();openWelcomeSteward()};
+  accountCard.querySelector('#confirmSteward').onclick=startStripeCheckout;
   accountCard.querySelector('#cancelSteward').onclick=openMembership;
 }
 function openWelcomeSteward(){
   accountCard.innerHTML=`<h2>Welcome, Steward.</h2>
     <div class="stewardBadge">✦ Steward</div>
-    <p>Cloud Save, Legacy Book, Seasonal Wonders, and Family Sanctuaries are now marked as unlocked in test mode.</p>
+    <p>Cloud Save, Legacy Book, Seasonal Wonders, and Family Sanctuaries are now unlocked. Webhook verification will keep your account in sync.</p>
     <button id="finishSteward">Continue</button>`;
   accountCard.querySelector('#finishSteward').onclick=openAccount;
 }
 function openManageMembership(){
   accountCard.innerHTML=`<h2>Manage Steward</h2>
-    <p>Status: Active Test Membership<br>Renews: ${escapeHtml(state.renewalDate||plannedRenewal())}</p>
-    <button id="cancelTest">Cancel Test Membership</button>
+    <p>Status: Active Steward<br>Renews: ${escapeHtml(state.renewalDate||plannedRenewal())}</p>
+    <button id="openPortal">Open Stripe Billing Portal</button>
+    <button id="localDeactivate">Local Dev: Mark Free</button>
     <button id="backMembership">Back</button>`;
-  accountCard.querySelector('#cancelTest').onclick=()=>{deactivateStewardTest();setHint('Steward test membership cancelled.');openAccount()};
+  accountCard.querySelector('#openPortal').onclick=openBillingPortal;
+  accountCard.querySelector('#localDeactivate').onclick=()=>{deactivateStewardTest();setHint('Local membership flag cleared. Stripe status remains unchanged.');openAccount()};
   accountCard.querySelector('#backMembership').onclick=openMembership;
 }
 function restorePurchaseMock(){
   state.purchaseStatus='restore_checked';
-  state.syncStatus=state.subscriber?'purchase restored: steward active':'restore checked: no active purchase';
+  state.syncStatus=state.subscriber?'purchase restored locally: steward active':'restore checked locally: no active purchase';
   save();updateCloudBadge();
-  setHint(state.subscriber?'Purchase restored. Steward active.':'No active purchase found in test mode.');
+  setHint(state.subscriber?'Purchase restored. Steward active.':'No active local Steward purchase found.');
   openAccount();
 }
 function exportLegacyJson(){
@@ -1269,17 +1326,26 @@ function openLegacy(){
     <p><b style="color:var(--bone)">Photos / Memories:</b> ${state.moments.length}<br>
     <b style="color:var(--bone)">Wonders Completed:</b> ${completeCountVal}<br>
     <b style="color:var(--bone)">Current Chapter:</b> ${escapeHtml(currentWonderName())}<br>
-    <b style="color:var(--bone)">Legacy Book:</b> ${state.subscriber?'Unlocked in test mode':'Steward feature'}</p>
+    <b style="color:var(--bone)">Legacy Book:</b> ${state.subscriber?'Unlocked':'Steward feature'}</p>
     <button id="exportJson">Export Archive</button>
     <button id="legacyBook">Preview Legacy Book</button>
     <button id="closeLegacy">Close</button>`;
   legacyPanel.style.display='flex';
   legacyCard.querySelector('#exportJson').onclick=exportLegacyJson;
-  legacyCard.querySelector('#legacyBook').onclick=()=>{legacyCard.innerHTML=`<h2>Legacy Book Preview</h2><p>Coming next: a beautiful PDF with your aspiration, memories, photos, completed wonders, and hero evolution. Steward unlock is now represented in G1.</p><button id="backLegacy">Back</button>`;legacyCard.querySelector('#backLegacy').onclick=openLegacy};
+  legacyCard.querySelector('#legacyBook').onclick=()=>{if(!state.subscriber){legacyPanel.style.display='none';accountPanel.style.display='flex';openMembership();return;} legacyCard.innerHTML=`<h2>Legacy Book Preview</h2><p>Coming next: a beautiful PDF with your aspiration, memories, photos, completed wonders, and hero evolution. Steward unlock is active.</p><button id="backLegacy">Back</button>`;legacyCard.querySelector('#backLegacy').onclick=openLegacy};
   legacyCard.querySelector('#closeLegacy').onclick=()=>legacyPanel.style.display='none';
 }
 accountPanel.addEventListener('pointerdown',e=>{if(e.target===accountPanel)accountPanel.style.display='none'});
 legacyPanel.addEventListener('pointerdown',e=>{if(e.target===legacyPanel)legacyPanel.style.display='none'});
+
+window.mosesRequireSteward=function(feature){
+  if(state.subscriber) return true;
+  if(typeof setHint==='function') setHint((feature||'This feature')+' is a Steward feature.');
+  accountPanel.style.display='flex';
+  openMembership();
+  return false;
+};
+handleStripeReturn();
 
 function askAspiration(){openPanel(`<h2>Who would you like to become?</h2><p>The light has found a ruin. Name what you are restoring in yourself.</p><input id="asp" placeholder="speak it plainly" maxlength="70"><button id="go">It is spoken</button>`);const inp=card.querySelector('#asp');setTimeout(()=>inp.focus(),50);card.querySelector('#go').onclick=()=>{const v=inp.value.trim();if(!v)return;state.aspiration=v;state.phase='world';state.introDone=true;closePanel();becoming.textContent='becoming — '+v.toLowerCase();becoming.style.opacity=.9;count.textContent='0 of '+TIERS;logBtn.classList.add('show');skip.style.display='none';setHint('Each true act lays a stone. Log one moment.');save()}}
 function askMoment(){openPanel(`<h2>What did you do toward it?</h2><textarea id="imp" placeholder="one true thing" maxlength="120"></textarea><button id="photoBtn" type="button">Attach photo</button><button id="go">Lay the stone</button>`);const inp=card.querySelector('#imp');setTimeout(()=>inp.focus(),50);card.querySelector('#photoBtn').onclick=()=>photoInput.click();card.querySelector('#go').onclick=()=>{const v=inp.value.trim();if(!v)return;const moment={id:Date.now()+''+Math.random(),label:v,photo:draftPhoto,date:new Date().toLocaleDateString(undefined,{month:'short',day:'numeric'}),tier:state.activeWonder==='mausoleum'?['Legacy ground','Memory steps','Ancestor columns','Inner chamber','Life frieze','Pyramid roof','Crown light','Memorial flames'][state.mausoleumProgress]||'Legacy rite '+(state.mausoleumProgress+1):state.activeWonder==='artemis'?['Sanctuary ground','Marble base','First column','Second column','Sacred deer','Sacred tree','Temple steps','Roof beam','Pediment','Braziers'][state.artemisProgress]||'Artemis rite '+(state.artemisProgress+1):state.activeWonder==='gardens'?['Foundation channels','Dry aqueduct','Lower terrace','First green','Vine curtains','Palm grove','Hanging walkway','Waterfall course','Upper garden','Flower canopy','Sacred arbor','Fountain crown'][state.gardenProgress]||'Garden terrace '+(state.gardenProgress+1):'Lighthouse stone '+(state.progress+1)};draftPhoto=null;state.moments.push(moment);state.syncStatus='local changes not synced';updateCloudBadge();g3UpdateWorldOverlay();renderJournal();closePanel();layStone();save()}}
@@ -2926,7 +2992,7 @@ window.MILESTONE_G32_READY='animated-builder';
  function clamp(v,a,b){return Math.max(a,Math.min(b,v))}
  function update(){pos.x=clamp(pos.x,90,1290);pos.y=clamp(pos.y,80,800);hero.style.left=pos.x+'px';hero.style.top=pos.y+'px';world.style.transform='translate(calc(-50% + '+(700-pos.x)*.45+'px), calc(-50% + '+(450-pos.y)*.45+'px)) scale(1)'}
  function show(title,body){mt.textContent=title;mb.textContent=body;modal.classList.add('open')}
- enter.onclick=open; exit.onclick=closeScene; close.onclick=()=>modal.classList.remove('open');
+ enter.onclick=()=>{if(window.mosesRequireSteward&&!window.mosesRequireSteward('the Great Library')) return; open();}; exit.onclick=closeScene; close.onclick=()=>modal.classList.remove('open');
  document.addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true});
  document.addEventListener('keyup',e=>{keys[e.key.toLowerCase()]=false});
  document.querySelectorAll('#g80Controls button').forEach(b=>{b.addEventListener('pointerdown',()=>keys[b.dataset.move]=true);b.addEventListener('pointerup',()=>keys[b.dataset.move]=false);b.addEventListener('pointerleave',()=>keys[b.dataset.move]=false)});
